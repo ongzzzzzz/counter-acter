@@ -12,7 +12,7 @@ const prefix = "./counter";
 
 const client = new Discord.Client();
 
-const targetChannels = ['count-test', 'dormant'];
+const targetChannels = ['count-to-a-million', 'bot-playground'];
 
 const Database = require("@replit/database");
 const db = new Database();
