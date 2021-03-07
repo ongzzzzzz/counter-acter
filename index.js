@@ -10,24 +10,23 @@ const fs = require('fs');
 const Discord = require('discord.js');
 const prefix = "./counter";
 
-
 const client = new Discord.Client();
-client.commands = new Discord.Collection();
 
 const targetChannels = ['count-to-a-million', 'bot-playground'];
-const targetChannelIds = ['780608907012866098', '782925243991457813'];
-let targetChannelObjects = [];
-
 
 const Database = require("@replit/database");
 const db = new Database();
 
-
-var schedule = require('node-schedule');
-
+//var schedule = require('node-schedule');
 
 function isNumeric(myString) { return /\d/.test(myString); }
 function randomElem (array) {	return array[Math.floor(Math.random() * array.length)] }
+async function set_db(name, value) {
+	await db.set(name, value.toString())
+    .then(() => 
+	    console.log(`saved ${value} to "${name}"`)
+    ); 
+}
 String.prototype.formatUnicorn = String.prototype.formatUnicorn ||
 function () {
     "use strict";
@@ -75,7 +74,7 @@ const newlineError = [
 ]
 
 
-var count;
+//var count;
 
 client.once("ready", async () => {
 
@@ -84,41 +83,14 @@ client.once("ready", async () => {
 		{ type: "WATCHING" }
 	);
 
-	// yes this is ugly but ehhhh it works
-	let countToAMillionChannel = await client.channels.fetch("780608907012866098");
-	let botPlaygroundChannnel = await client.channels.fetch("781051991363026965");
-	targetChannelObjects.push(countToAMillionChannel);
-	targetChannelObjects.push(botPlaygroundChannnel);
-
-  // check for latest msgs every 2 secs
-	var job = schedule.scheduleJob('*/2 * * * * *', async () => {
-
-		targetChannelObjects.forEach(async channel => {
-			let messages = await channel.messages.fetch({ limit: 1 });
-			let lastMsg = messages.first();
-			let latestNum = parseInt(lastMsg.content);
-
-			db.get(`count_${channel.name}`).then(async value => {
-
-				let lastAuthor = await db.get(`lastAuthor_${channel.name}`);
-
-				if(lastMsg.author.id == lastAuthor){
-					if(latestNum != value){
-						console.log(`got ppl hand gatai edit in ${channel.name}`);
-						await lastMsg.author.send(randomElem(handGataiError))
-							.catch(e => console.error(e));
-						await db.set(`count_${channel.name}`, value-1);
-						lastMsg.delete();							
-					}
-				}
-
-			});
-
-			return
-		})
-
-	});
-
+    // init
+    for (let channel_name of targetChannels) {
+        let lastNum = await db.get(`count_${channel_name}`);
+        if (!isNumeric(lastNum)) {
+            console.log("Initializing database: " + channel_name);
+            set_db(`count_${channel_name}`, '0'); 
+        }
+    }
 });
 
 
@@ -135,22 +107,19 @@ so each channel different streams of counting
 */
 
 
-
-
-
 client.on('message', async message => {
+    if (message.author.bot) return;
 	try {
 		// console.log(message.channel.id) // get channel id
 		if(targetChannels.includes(message.channel.name)){
-			let messages = await message.channel.messages.fetch({ limit: 2 });
-			let lastMsg = messages.last();
-
 			if(!isNumeric(message.content)){
 				message.delete();
 				message.author.send(randomElem(nanError)).catch(e => console.error(e));
 			} else {
 
-				if (message.author.id === lastMsg.author.id) {
+                let lastAuthor = await db.get(`lastAuthor_${message.channel.name}`);
+                // double count
+				if (message.author.id === lastAuthor) {
 					message.delete();
 					message.author.send(randomElem(twiceError)).catch(e => console.error(e));
 					return;
@@ -158,19 +127,19 @@ client.on('message', async message => {
 
 				let sentNum = parseInt(message.content);
 
+                // multiple lines
 				if (/\r\n|\r|\n/.test(message.content)){					
 					if(message.content.match(/\d/g).length > sentNum.toString().split("").length){
-						// console.log("OI REAL GOT KID")
 						message.delete();
 						message.author.send(randomElem(newlineError)).catch(e => console.error(e));
 						return;
 					}
 				}
 
-				// let lastSentNum = parseInt(lastMsg.content);
-				// before /\ 			after \/
+
 				let lastSentNum = await db.get(`count_${message.channel.name}`);
 				lastSentNum = await parseInt(lastSentNum);
+                console.log("lastSentNum from database: " + lastSentNum);
 
 				if (sentNum != (lastSentNum+1) ){
 
@@ -182,13 +151,9 @@ client.on('message', async message => {
 
 				} else {
 
-					db.set(`count_${message.channel.name}`, sentNum.toString()).then(() => 
-						console.log(`saved ${sentNum} to "count_${message.channel.name}"`)
-					);
-					db.set(`lastAuthor_${message.channel.name}`, message.author.id).then(() => 
-						console.log(`saved ${message.author.id} to "lastAuthor_${message.channel.name}"`)
-					);
-					
+					set_db(`count_${message.channel.name}`, sentNum);
+					set_db(`lastAuthor_${message.channel.name}`, message.author.id);
+                    
 				}
 			}
 		} 
@@ -197,5 +162,41 @@ client.on('message', async message => {
 	}
 });
 
+client.on('messageUpdate', async (oldMessage, newMessage) => {
+    let lastSentNum = await parseInt(oldMessage.content);
+    let newSentNum = await parseInt(newMessage.content);
+
+    // ignore past messages
+    let latestCnt = await db.get(`count_${newMessage.channel.name}`);
+    if (lastSentNum.toString() != latestCnt) return;
+    
+    if(newSentNum != lastSentNum){
+        await newMessage.delete();
+        newMessage.author.send(randomElem(handGataiError))
+            .catch(e => console.error(e));
+
+        // don't count edited message
+        set_db(`count_${newMessage.channel.name}`, lastSentNum-1)
+        // set to last visible author
+		let lastMsg = await newMessage.channel.messages.fetch({ limit: 1 });
+        lastMsg = await lastMsg.last();
+        set_db(`lastAuthor_${newMessage.channel.name}`, lastMsg.author.id);
+    }
+});
+
+client.on('messageDelete', async Message => {
+
+    let sentNum = parseInt(Message.content);
+    // ignore past messages
+    let latestCnt = await db.get(`count_${Message.channel.name}`);
+    if (sentNum.toString() != latestCnt) return;
+    
+    // don't count deleted message
+    set_db(`count_${Message.channel.name}`, sentNum-1);
+    // set to last visible author
+	let lastMsg = await Message.channel.messages.fetch({ limit: 1 });
+    lastMsg = await lastMsg.last();
+    set_db(`lastAuthor_${Message.channel.name}`, lastMsg.author.id);
+});
 
 client.login(process.env.BOT_TOKEN);
